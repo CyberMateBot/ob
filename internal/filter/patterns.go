@@ -150,6 +150,27 @@ var ScamJobPatterns = []WeightedPattern{
 
 	// Telegram mini-app / story spam links (t.me/m/...).
 	p(`t\.me/m/[a-zA-Z0-9_-]+`, 30, "tme_m_path_spam"),
+
+	// Work-from-home + daily income + 18+ + @contact.
+	p(`работа\s+из\s+дома`, 28, "work_from_home"),
+	p(`доход\s+от\s+\d+.{0,20}(?:р|₽).{0,15}в\s+день`, 30, "income_from_amount_daily"),
+	p(`совершеннолетн|только\s+для.{0,15}18\+`, 22, "adults_only_job"),
+	p(`(?:пишите|пиши|напиши).{0,40}@\w+`, 25, "write_to_username"),
+
+	// Blunt money bait.
+	p(`хочешь.{0,20}поднять.{0,15}бабок|поднять\s+бабок`, 35, "raise_money_bait"),
+	p(`пиши\s+мне|пиши\s*-\s*мне`, 25, "write_me_dm"),
+
+	// DPS radar / map app ads (often with attachment, little text).
+	p(`дпс\s+радар|радар.{0,40}дпс|беслпатн.{0,25}дпс|бесплатн.{0,25}дпс\s+радар`, 32, "dps_radar_spam"),
+	p(`показывает\s+где\s+стоят\s+пост|посты\s+на\s+карте`, 28, "police_posts_map"),
+
+	// Vague "easy help" recruitment.
+	p(`требуются\s+люди.{0,50}помощ|ничего\s+тяжелого.{0,50}вознагражден`, 30, "easy_help_reward"),
+	p(`вознаграждение\s+достойн.{0,40}(?:обсудим|заинтерес)`, 25, "decent_reward_discuss"),
+
+	// "Profitable business" DM bait.
+	p(`прибыльн.{0,15}дело|есть\s+прибыльн`, 30, "profitable_deal_spam"),
 }
 
 // Ban-tier scams (weight ≥ default ban threshold 80 — one hit ⇒ ban).

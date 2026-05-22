@@ -57,7 +57,7 @@ func New(cfg *config.Config, store *storage.Storage) *Filter {
 // Analyze scores a message and returns the recommended action.
 // Call only after verifying msg.From is non-nil.
 func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
-	text, entities := messageTextAndEntities(msg)
+	text, entities, buttonURLs := messageContentForAnalysis(msg)
 
 	var score int
 	var reasons []string
@@ -83,12 +83,25 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 
 	// ── 2. Link analysis ────────────────────────────────────────
 	urls := extractURLsFromEntities(text, entities)
+	urls = append(urls, buttonURLs...)
 
-	// Foreign invite links
-	for _, inv := range InviteLinkRe.FindAllString(text, -1) {
-		if !f.isAllowedInvite(inv) {
-			score += 40
-			reasons = append(reasons, "foreign_invite")
+	// Spam via inline URL buttons (often no copyable text in message body).
+	if n := len(buttonURLs); n > 0 {
+		score += 35
+		reasons = append(reasons, "inline_url_button")
+		if strings.TrimSpace(messageBodyText(msg)) == "" {
+			score += 25
+			reasons = append(reasons, "url_buttons_only")
+		}
+	}
+
+	// Foreign invite links (body + inline button URLs)
+	for _, src := range append([]string{text}, buttonURLs...) {
+		for _, inv := range InviteLinkRe.FindAllString(src, -1) {
+			if !f.isAllowedInvite(inv) {
+				score += 40
+				reasons = append(reasons, "foreign_invite")
+			}
 		}
 	}
 
@@ -196,11 +209,59 @@ func applyPatterns(text string, score int, reasons []string, patterns []Weighted
 	return score, reasons
 }
 
+func messageBodyText(msg *tgbotapi.Message) string {
+	if msg.Text != "" {
+		return msg.Text
+	}
+	return msg.Caption
+}
+
 func messageTextAndEntities(msg *tgbotapi.Message) (string, []tgbotapi.MessageEntity) {
 	if msg.Text != "" {
 		return msg.Text, msg.Entities
 	}
 	return msg.Caption, msg.CaptionEntities
+}
+
+// messageContentForAnalysis merges body text/caption with inline-keyboard labels
+// and collects URL targets from inline buttons (invisible in plain message text).
+func messageContentForAnalysis(msg *tgbotapi.Message) (string, []tgbotapi.MessageEntity, []string) {
+	text, entities := messageTextAndEntities(msg)
+	var buttonURLs, buttonLabels []string
+
+	if msg.ReplyMarkup != nil {
+		for _, row := range msg.ReplyMarkup.InlineKeyboard {
+			for _, btn := range row {
+				if btn.Text != "" {
+					buttonLabels = append(buttonLabels, btn.Text)
+				}
+				if btn.URL != nil && *btn.URL != "" {
+					buttonURLs = append(buttonURLs, *btn.URL)
+				}
+				if btn.LoginURL != nil && btn.LoginURL.URL != "" {
+					buttonURLs = append(buttonURLs, btn.LoginURL.URL)
+				}
+			}
+		}
+	}
+
+	if len(buttonLabels) > 0 {
+		labels := strings.Join(buttonLabels, "\n")
+		if text != "" {
+			text += "\n" + labels
+		} else {
+			text = labels
+		}
+	}
+	if len(buttonURLs) > 0 {
+		if text != "" {
+			text += "\n" + strings.Join(buttonURLs, "\n")
+		} else {
+			text = strings.Join(buttonURLs, "\n")
+		}
+	}
+
+	return text, entities, buttonURLs
 }
 
 func extractURLsFromEntities(text string, entities []tgbotapi.MessageEntity) []string {
