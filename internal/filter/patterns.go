@@ -117,7 +117,11 @@ var ScamJobPatterns = []WeightedPattern{
 
 	// Fake driver licence / boating licence docs.
 	p(`оформл(?:ение|лення).{0,40}водительск`, 30, "fake_driver_license"),
-	p(`документы\s+гимс|гимс.{0,25}[🚗⛵]|[🚗⛵].{0,20}гимс`, 30, "gims_docs_spam"),
+	p(`документ.{0,20}гимс|гимс.{0,25}[🚗⛵]|[🚗⛵].{0,20}гимс`, 30, "gims_docs_spam"),
+	p(`официальн.{0,30}гибдд|через\s+гибдд`, 32, "gibdd_official_claim"),
+	p(`без\s+сдачи\s+экзамен`, 35, "no_exam_license"),
+	p(`помощь.{0,50}(?:получени|возврат).{0,40}прав|получени.{0,40}прав.{0,60}возврат`, 35, "license_rights_help"),
+	p(`обращайтесь.{0,40}личн`, 25, "contact_in_dm"),
 
 	// Caps-lock mass hiring + money.
 	p(`нужны\s+люди.{0,150}(?:в\s*день|₽|\$|р\s*\+)`, 35, "need_people_money_combo"),
@@ -183,6 +187,7 @@ var BanPatterns = []WeightedPattern{
 	p(`банкомат.{0,80}обмен|обмен.{0,40}usdt`, 85, "ban_usdt_atm_meetup"),
 	p(`нужны\s+деньги.{0,60}стартуй`, 85, "ban_need_money_start"),
 	p(`пиши\s+и\s+стартуй`, 85, "ban_write_and_start"),
+	p(`гибдд.{0,120}без\s+сдачи\s+экзамен|без\s+сдачи\s+экзамен.{0,120}гибдд`, 85, "ban_gibdd_no_exam"),
 }
 
 // Generic spam call-to-action phrases.

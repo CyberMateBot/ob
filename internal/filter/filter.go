@@ -58,9 +58,16 @@ func New(cfg *config.Config, store *storage.Storage) *Filter {
 // Call only after verifying msg.From is non-nil.
 func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 	text, entities, buttonURLs := messageContentForAnalysis(msg)
+	scanText := normalizeFilterText(text)
 
 	var score int
 	var reasons []string
+
+	// Strikethrough / combining-mark obfuscation (О̷ф̷и̷ц̷и̷а̷л̷ь̷н̷о̷-style).
+	if ratio := combiningMarkRatio(text); ratio >= 0.2 {
+		score += 30
+		reasons = append(reasons, "unicode_format_evasion")
+	}
 
 	// Check for spam replies
 	if msg.ReplyToMessage != nil && (strings.TrimSpace(text) == "+" || strings.TrimSpace(text) == "спасибо" || len(strings.TrimSpace(text)) <= 3) {
@@ -74,12 +81,12 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 	userState := f.store.GetOrCreateUser(userID)
 	isNewUser := userState.MessageCount < f.cfg.NewUserMessages
 
-	// ── 1. Keyword scoring ──────────────────────────────────────
-	score, reasons = applyPatterns(text, score, reasons, VPNPatterns)
-	score, reasons = applyPatterns(text, score, reasons, PhishingPatterns)
-	score, reasons = applyPatterns(text, score, reasons, ScamJobPatterns)
-	score, reasons = applyPatterns(text, score, reasons, BanPatterns)
-	score, reasons = applyPatterns(text, score, reasons, CTAPatterns)
+	// ── 1. Keyword scoring (on normalized text) ─────────────────
+	score, reasons = applyPatterns(scanText, score, reasons, VPNPatterns)
+	score, reasons = applyPatterns(scanText, score, reasons, PhishingPatterns)
+	score, reasons = applyPatterns(scanText, score, reasons, ScamJobPatterns)
+	score, reasons = applyPatterns(scanText, score, reasons, BanPatterns)
+	score, reasons = applyPatterns(scanText, score, reasons, CTAPatterns)
 
 	// ── 2. Link analysis ────────────────────────────────────────
 	urls := extractURLsFromEntities(text, entities)
@@ -96,7 +103,7 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 	}
 
 	// Foreign invite links (body + inline button URLs)
-	for _, src := range append([]string{text}, buttonURLs...) {
+	for _, src := range append([]string{scanText}, buttonURLs...) {
 		for _, inv := range InviteLinkRe.FindAllString(src, -1) {
 			if !f.isAllowedInvite(inv) {
 				score += 40
@@ -157,8 +164,8 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 	}
 
 	// Duplicate / repeated message from the same user in this chat
-	hash := messageHash(text)
-	if text != "" && f.store.IsDuplicate(chatID, userID, hash) {
+	hash := messageHash(scanText)
+	if scanText != "" && f.store.IsDuplicate(chatID, userID, hash) {
 		score += 50
 		reasons = append(reasons, "duplicate_message")
 	}
@@ -330,7 +337,7 @@ func extractDomain(rawURL string) string {
 }
 
 func messageHash(text string) string {
-	normalized := strings.ToLower(strings.TrimSpace(text))
+	normalized := strings.ToLower(strings.TrimSpace(normalizeFilterText(text)))
 	return fmt.Sprintf("%x", md5.Sum([]byte(normalized)))
 }
 
