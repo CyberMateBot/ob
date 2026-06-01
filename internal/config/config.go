@@ -64,6 +64,9 @@ func Load(path string) (*Config, error) {
 	if token := os.Getenv("BOT_TOKEN"); token != "" {
 		cfg.BotToken = token
 	}
+	if proxy := os.Getenv("PROXY_URL"); proxy != "" {
+		cfg.ProxyURL = proxy
+	}
 
 	if cfg.BotToken == "" {
 		return nil, fmt.Errorf("bot_token is required (set in config.yaml or BOT_TOKEN env)")

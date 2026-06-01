@@ -83,12 +83,35 @@ func (b *Bot) Stop() {
 	close(b.stop)
 }
 
-// SetWebhook sets the webhook URL for the bot.
-func (b *Bot) SetWebhook(url string) error {
-	config, err := tgbotapi.NewWebhook(url)
+// SetWebhook registers the Telegram webhook endpoint.
+func (b *Bot) SetWebhook(webhookURL string) error {
+	cfg, err := tgbotapi.NewWebhook(webhookURL)
 	if err != nil {
 		return err
 	}
-	_, err = b.api.Request(config)
+	cfg.DropPendingUpdates = true
+	cfg.MaxConnections = 40
+	_, err = b.api.Request(cfg)
 	return err
+}
+
+// DeleteWebhook removes the webhook so long polling can be used.
+func (b *Bot) DeleteWebhook() error {
+	_, err := b.api.Request(tgbotapi.DeleteWebhookConfig{DropPendingUpdates: true})
+	return err
+}
+
+// LogWebhookInfo prints current webhook status from Telegram (diagnostics).
+func (b *Bot) LogWebhookInfo() {
+	info, err := b.api.GetWebhookInfo()
+	if err != nil {
+		log.Printf("GetWebhookInfo: %v", err)
+		return
+	}
+	if info.LastErrorDate != 0 {
+		log.Printf("Webhook: url=%q pending=%d last_error=%q (%d)",
+			info.URL, info.PendingUpdateCount, info.LastErrorMessage, info.LastErrorDate)
+	} else {
+		log.Printf("Webhook: url=%q pending=%d", info.URL, info.PendingUpdateCount)
+	}
 }

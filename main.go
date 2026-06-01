@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"odysseyshield/internal/bot"
@@ -33,61 +34,81 @@ func main() {
 		log.Fatalf("bot init: %v", err)
 	}
 
-	// Set webhook if WEBHOOK_URL is provided
-	webhookURL := os.Getenv("WEBHOOK_URL")
-	if webhookURL != "" {
+	usePolling := envBool("POLLING")
+	webhookURL := strings.TrimSpace(os.Getenv("WEBHOOK_URL"))
+	if usePolling {
+		if err := b.DeleteWebhook(); err != nil {
+			log.Printf("DeleteWebhook: %v", err)
+		} else {
+			log.Println("Webhook removed, using long polling")
+		}
+	} else if webhookURL != "" {
 		if err := b.SetWebhook(webhookURL); err != nil {
 			log.Printf("Failed to set webhook: %v", err)
 		} else {
 			log.Printf("Webhook set to %s", webhookURL)
 		}
+		b.LogWebhookInfo()
+	} else {
+		log.Println("WARNING: WEBHOOK_URL is empty and POLLING is not set — bot will not receive updates")
 	}
 
 	log.Println("Odyssey Shield (MVP) started")
 
-	// Webhook handler
-	http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux := http.NewServeMux()
 
-		var update tgbotapi.Update
-		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-			log.Printf("Failed to decode update: %v", err)
-			http.Error(w, "Bad request", http.StatusBadRequest)
-			return
-		}
-
-		b.HandleUpdate(update)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	})
 
-	// Health check
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
+	if !usePolling && webhookURL != "" {
+		mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			var update tgbotapi.Update
+			if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+				log.Printf("Failed to decode update: %v", err)
+				http.Error(w, "Bad request", http.StatusBadRequest)
+				return
+			}
 
-	// Read port from environment
+			log.Printf("Webhook update: id=%d message=%t callback=%t",
+				update.UpdateID, update.Message != nil, update.CallbackQuery != nil)
+
+			b.HandleUpdate(update)
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+	addr := "0.0.0.0:" + port
+	log.Printf("Listening on %s (health: /health)", addr)
 
-	log.Printf("Starting server on port %s", port)
-
-	// Start server
 	go func() {
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
+		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
-	// Wait for shutdown signal
+	if usePolling {
+		log.Println("Starting long polling…")
+		go b.Start()
+	}
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	log.Println("Shutting down...")
+	log.Println("Shutting down…")
+}
+
+func envBool(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes"
 }
