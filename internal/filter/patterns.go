@@ -107,6 +107,16 @@ var ScamJobPatterns = []WeightedPattern{
 	p(`поручен.{0,25}на.{0,20}час`, 25, "errands_per_hour"),
 	p(`без.{0,20}движен.{0,30}оклад`, 25, "no_movement_salary"),
 
+	// Casual apartment / "man for an hour" micro-jobs (cash, vague DM).
+	p(`нужен.{0,50}(?:муж|человек|парень|мужик).{0,25}на\s+час`, 30, "man_for_hour_hire"),
+	p(`адекватн.{0,25}(?:муж|человек|парень).{0,25}на\s+час`, 30, "adequate_man_hour"),
+	p(`задач.{0,35}по\s+квартир`, 28, "apartment_tasks"),
+	p(`скину\s+\d{3,}|скину.{0,20}\d{3,}`, 28, "will_transfer_amount"),
+	p(`наличкой|наличными|наличк[ауой]`, 22, "cash_payment_slang"),
+	p(`скину\s+\d+.{0,50}налич|налич.{0,40}скину`, 32, "amount_cash_offer"),
+	p(`пишите.{0,25}в\s+общем|буду\s+благодарн`, 24, "vague_dm_thanks"),
+	p(`нужен.{0,80}квартир.{0,120}(?:скину|налич|пиш)`, 35, "apartment_cash_hire"),
+
 	// Garage/yard cash-in-hand micro-jobs.
 	p(`участк.{0,40}уборк.{0,30}гараж|уборк.{0,30}гараж.{0,50}\d+`, 28, "garage_cleanup_job"),
 	p(`ответственн.{0,50}участк.{0,50}(?:уборк|покос|помощ)`, 30, "responsible_yard_job"),
