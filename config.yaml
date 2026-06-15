@@ -34,9 +34,9 @@ trusted_users: []
   # - 123456789
 
 # Telegram usernames (with or without @) that bypass all filters.
-trusted_usernames: []
-  # - "@durov"
-  # - "durov"
+trusted_usernames:
+  - "ionenumberone"
+  - "antonevgnevich"
 
 # Chat IDs whose forwarded messages are treated as trustworthy.
 trusted_chats:

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"odysseyshield/internal/filter"
+	"odysseyshield/internal/storage"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -17,9 +18,15 @@ import (
 func (b *Bot) handleUpdate(upd tgbotapi.Update) {
 	switch {
 	case upd.Message != nil:
-		b.handleMessage(upd.Message)
+		msg := upd.Message
+		log.Printf("Update %d: chat=%d type=%s from=%v text_len=%d",
+			upd.UpdateID, msg.Chat.ID, msg.Chat.Type, msg.From != nil, len(messageText(msg)))
+		b.handleMessage(msg)
 	case upd.CallbackQuery != nil:
+		log.Printf("Update %d: callback from=%d", upd.UpdateID, upd.CallbackQuery.From.ID)
 		b.handleCallback(upd.CallbackQuery)
+	default:
+		log.Printf("Update %d: unhandled type", upd.UpdateID)
 	}
 }
 
@@ -28,9 +35,11 @@ func (b *Bot) handleUpdate(upd tgbotapi.Update) {
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	// Skip channel posts and anonymous-admin messages (SenderChat set, From nil or bot).
 	if msg.From == nil {
+		log.Printf("Skip msg %d: no From (channel/anonymous post?)", msg.MessageID)
 		return
 	}
 	if msg.SenderChat != nil {
+		log.Printf("Skip msg %d: SenderChat set", msg.MessageID)
 		return
 	}
 
@@ -39,12 +48,14 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 
 	// Trusted users bypass all filters (by ID or username).
 	if b.cfg.IsTrustedUser(userID) || b.cfg.IsTrustedUsername(msg.From.UserName) {
+		log.Printf("Skip msg %d: trusted user %d", msg.MessageID, userID)
 		b.store.IncrementMessageCount(userID)
 		return
 	}
 
 	// Chat admins bypass all filters (cached check).
 	if b.isAdmin(chatID, userID) {
+		log.Printf("Skip msg %d: chat admin %d", msg.MessageID, userID)
 		b.store.IncrementMessageCount(userID)
 		return
 	}
@@ -60,6 +71,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	defer b.store.IncrementMessageCount(userID)
 
 	if result.Action == filter.ActionNone {
+		log.Printf("Msg %d: score=%d below threshold, no action", msg.MessageID, result.Score)
 		return
 	}
 
@@ -105,9 +117,14 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 //   ban|<chatID>|<userID>              — legacy ban without msgID
 
 func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
+	if cb.From == nil {
+		return
+	}
+	log.Printf("Callback: data=%q from=%s (%d)", cb.Data, displayName(cb.From), cb.From.ID)
+
 	parts := strings.Split(cb.Data, "|")
 	if len(parts) < 3 {
-		b.answerCallback(cb.ID, "❌ Неверный формат")
+		b.answerCallback(cb.ID, "❌ Неверный формат", true)
 		return
 	}
 
@@ -115,7 +132,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 
 	chatID, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		b.answerCallback(cb.ID, "❌ Неверный chatID")
+		b.answerCallback(cb.ID, "❌ Неверный chatID", true)
 		return
 	}
 
@@ -124,25 +141,37 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	switch action {
 	case "res":
 		if len(parts) < 4 {
-			b.answerCallback(cb.ID, "❌ Ошибка")
+			b.answerCallback(cb.ID, "❌ Ошибка", true)
 			return
 		}
 		msgID, e1 := strconv.Atoi(parts[2])
 		targetUserID, e2 := strconv.ParseInt(parts[3], 10, 64)
 		if e1 != nil || e2 != nil {
-			b.answerCallback(cb.ID, "❌ Ошибка данных")
+			b.answerCallback(cb.ID, "❌ Ошибка данных", true)
 			return
 		}
 
-		b.unbanUser(chatID, targetUserID)
+		deleted, hasDeleted := b.store.GetDeleted(chatID, msgID)
+		if err := b.restoreUser(chatID, targetUserID); err != nil {
+			b.answerCallback(cb.ID, "❌ Не удалось снять ограничения", true)
+			return
+		}
 
-		var userRef string
-		if deleted, ok := b.store.GetDeleted(chatID, msgID); ok {
+		restoredText := false
+		if hasDeleted {
+			restoredText = b.repostDeletedMessage(chatID, deleted)
+		}
+
+		userRef := fmt.Sprintf("id%d", targetUserID)
+		if hasDeleted {
 			userRef = escapeHTML(deleted.Username)
-		} else {
-			userRef = fmt.Sprintf("id%d", targetUserID)
 		}
 		suffix := fmt.Sprintf("\n\n✅ <b>Восстановлен</b> %s — модератор %s", userRef, escapeHTML(moderatorName))
+		if restoredText {
+			suffix += "\n📨 Текст отправлен в чат"
+		} else if hasDeleted && strings.TrimSpace(deleted.Text) != "" {
+			suffix += "\n⚠️ Текст не удалось отправить в чат"
+		}
 		b.appendToLogMessage(cb, suffix)
 		b.answerCallback(cb.ID, "✅ Пользователь восстановлен")
 
@@ -153,7 +182,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		if len(parts) >= 4 {
 			targetMsgID, e = strconv.Atoi(parts[2])
 			if e != nil {
-				b.answerCallback(cb.ID, "❌ Ошибка данных")
+				b.answerCallback(cb.ID, "❌ Ошибка данных", true)
 				return
 			}
 			targetUserID, e = strconv.ParseInt(parts[3], 10, 64)
@@ -161,7 +190,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 			targetUserID, e = strconv.ParseInt(parts[2], 10, 64)
 		}
 		if e != nil {
-			b.answerCallback(cb.ID, "❌ Ошибка данных")
+			b.answerCallback(cb.ID, "❌ Ошибка данных", true)
 			return
 		}
 
@@ -181,7 +210,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		if len(parts) >= 4 {
 			targetMsgID, e = strconv.Atoi(parts[2])
 			if e != nil {
-				b.answerCallback(cb.ID, "❌ Ошибка данных")
+				b.answerCallback(cb.ID, "❌ Ошибка данных", true)
 				return
 			}
 			targetUserID, e = strconv.ParseInt(parts[3], 10, 64)
@@ -189,7 +218,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 			targetUserID, e = strconv.ParseInt(parts[2], 10, 64)
 		}
 		if e != nil {
-			b.answerCallback(cb.ID, "❌ Ошибка данных")
+			b.answerCallback(cb.ID, "❌ Ошибка данных", true)
 			return
 		}
 
@@ -203,7 +232,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		b.answerCallback(cb.ID, "🚫 Пользователь забанен")
 
 	default:
-		b.answerCallback(cb.ID, "❌ Неизвестное действие")
+		b.answerCallback(cb.ID, "❌ Неизвестное действие", true)
 	}
 
 }
@@ -285,6 +314,55 @@ func (b *Bot) unbanUser(chatID, userID int64) {
 	}
 }
 
+func (b *Bot) unmuteUser(chatID, userID int64) error {
+	cfg := tgbotapi.RestrictChatMemberConfig{
+		ChatMemberConfig: tgbotapi.ChatMemberConfig{
+			ChatID: chatID,
+			UserID: userID,
+		},
+		Permissions: &tgbotapi.ChatPermissions{
+			CanSendMessages:       true,
+			CanSendMediaMessages:  true,
+			CanSendPolls:          true,
+			CanSendOtherMessages:  true,
+			CanAddWebPagePreviews: true,
+		},
+	}
+	if _, err := b.api.Request(cfg); err != nil {
+		log.Printf("unmuteUser(%d, %d): %v", chatID, userID, err)
+		return err
+	}
+	return nil
+}
+
+func (b *Bot) restoreUser(chatID, userID int64) error {
+	b.unbanUser(chatID, userID)
+	if err := b.unmuteUser(chatID, userID); err != nil {
+		return err
+	}
+	b.store.ClearModeration(userID)
+	return nil
+}
+
+func (b *Bot) repostDeletedMessage(chatID int64, d *storage.DeletedMessage) bool {
+	if d == nil || strings.TrimSpace(d.Text) == "" {
+		return false
+	}
+	body := fmt.Sprintf(
+		"♻️ <b>Сообщение восстановлено модератором</b>\n"+
+			"👤 %s\n\n%s",
+		escapeHTML(d.Username),
+		escapeHTML(d.Text),
+	)
+	msg := tgbotapi.NewMessage(chatID, body)
+	msg.ParseMode = "HTML"
+	if _, err := b.api.Send(msg); err != nil {
+		log.Printf("repostDeletedMessage(%d): %v", chatID, err)
+		return false
+	}
+	return true
+}
+
 func (b *Bot) sendTempWarning(chatID int64, from *tgbotapi.User) {
 	name := displayName(from)
 	msg := tgbotapi.NewMessage(chatID,
@@ -301,8 +379,12 @@ func (b *Bot) sendTempWarning(chatID int64, from *tgbotapi.User) {
 	}()
 }
 
-func (b *Bot) answerCallback(id, text string) {
-	if _, err := b.api.Request(tgbotapi.NewCallback(id, text)); err != nil {
+func (b *Bot) answerCallback(id, text string, showAlert ...bool) {
+	cb := tgbotapi.NewCallback(id, text)
+	if len(showAlert) > 0 && showAlert[0] {
+		cb.ShowAlert = true
+	}
+	if _, err := b.api.Request(cb); err != nil {
 		log.Printf("answerCallback: %v", err)
 	}
 }
@@ -311,19 +393,39 @@ func (b *Bot) answerCallback(id, text string) {
 // removes the inline keyboard (action already taken).
 func (b *Bot) appendToLogMessage(cb *tgbotapi.CallbackQuery, suffix string) {
 	if cb.Message == nil {
+		log.Printf("appendToLogMessage: callback has no message")
 		return
 	}
 	logChatID := cb.Message.Chat.ID
 	logMsgID := cb.Message.MessageID
 
-	newText := cb.Message.Text + suffix
+	base := cb.Message.Text
+	if base == "" {
+		base = cb.Message.Caption
+	}
+	if base == "" {
+		log.Printf("appendToLogMessage: empty log message text")
+		b.removeLogKeyboard(logChatID, logMsgID)
+		return
+	}
+
+	newText := escapeHTML(base) + suffix
 	edit := tgbotapi.NewEditMessageText(logChatID, logMsgID, newText)
 	edit.ParseMode = "HTML"
 	empty := tgbotapi.NewInlineKeyboardMarkup()
 	edit.ReplyMarkup = &empty
 
-	if _, err := b.api.Send(edit); err != nil {
+	if _, err := b.api.Request(edit); err != nil {
 		log.Printf("appendToLogMessage: %v", err)
+		b.removeLogKeyboard(logChatID, logMsgID)
+	}
+}
+
+func (b *Bot) removeLogKeyboard(chatID int64, messageID int) {
+	empty := tgbotapi.NewInlineKeyboardMarkup()
+	edit := tgbotapi.NewEditMessageReplyMarkup(chatID, messageID, empty)
+	if _, err := b.api.Request(edit); err != nil {
+		log.Printf("removeLogKeyboard: %v", err)
 	}
 }
 

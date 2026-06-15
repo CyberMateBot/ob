@@ -99,6 +99,16 @@ func (s *Storage) SetBanned(userID int64) {
 	s.users[userID].Banned = true
 }
 
+// ClearModeration clears mute/ban flags after manual restore.
+func (s *Storage) ClearModeration(userID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u, ok := s.users[userID]; ok {
+		u.MutedUntil = time.Time{}
+		u.Banned = false
+	}
+}
+
 func (s *Storage) ensureUser(userID int64) {
 	if _, ok := s.users[userID]; !ok {
 		s.users[userID] = &UserState{}

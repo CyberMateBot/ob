@@ -69,10 +69,14 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 		reasons = append(reasons, "unicode_format_evasion")
 	}
 
-	// Check for spam replies
-	if msg.ReplyToMessage != nil && (strings.TrimSpace(text) == "+" || strings.TrimSpace(text) == "спасибо" || len(strings.TrimSpace(text)) <= 3) {
-		score += 50
-		reasons = append(reasons, "spam_reply")
+	// Check for spam replies (short "+" / thanks on spam bait).
+	if msg.ReplyToMessage != nil {
+		trimmed := strings.TrimSpace(text)
+		rLen := len([]rune(trimmed))
+		if trimmed == "+" || strings.EqualFold(trimmed, "спасибо") || rLen <= 2 {
+			score += 50
+			reasons = append(reasons, "spam_reply")
+		}
 	}
 
 	userID := msg.From.ID
@@ -163,15 +167,16 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 		reasons = append(reasons, "foreign_forward")
 	}
 
-	// Duplicate / repeated message from the same user in this chat
+	// Duplicate / repeated message from the same user in this chat (skip very short texts).
 	hash := messageHash(scanText)
-	if scanText != "" && f.store.IsDuplicate(chatID, userID, hash) {
-		score += 50
+	if scanText != "" && len([]rune(scanText)) >= 35 && f.store.IsDuplicate(chatID, userID, hash) {
+		score += 35
 		reasons = append(reasons, "duplicate_message")
 	}
 	f.store.RecordMessage(chatID, userID, hash)
 
-	// ── 4. Multipliers ──────────────────────────────────────────
+	// ── 4. Exemptions & multipliers ─────────────────────────────
+	score, reasons = applyExemptions(scanText, score, reasons)
 	if score > 0 && isNewUser {
 		score = int(float64(score) * 1.5)
 		reasons = append(reasons, "×1.5_new_user")
@@ -200,6 +205,12 @@ func (f *Filter) Analyze(msg *tgbotapi.Message) Result {
 	default:
 		action = ActionNone
 	}
+
+	action = softenAction(action, score, reasons, configThresholds{
+		Warn: f.cfg.RiskThresholds.Warn,
+		Mute: f.cfg.RiskThresholds.Mute,
+		Ban:  f.cfg.RiskThresholds.Ban,
+	})
 
 	return Result{Score: score, Reasons: reasons, Action: action}
 }

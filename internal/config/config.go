@@ -67,6 +67,10 @@ func Load(path string) (*Config, error) {
 	if proxy := os.Getenv("PROXY_URL"); proxy != "" {
 		cfg.ProxyURL = proxy
 	}
+	// Cloud hosts (Railway, Render, etc.) reach api.telegram.org directly; SOCKS proxy often breaks long polling.
+	if envBool("NO_PROXY") || envBool("DISABLE_PROXY") {
+		cfg.ProxyURL = ""
+	}
 
 	if cfg.BotToken == "" {
 		return nil, fmt.Errorf("bot_token is required (set in config.yaml or BOT_TOKEN env)")
@@ -78,6 +82,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func envBool(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 func (c *Config) IsTrustedUser(userID int64) bool {

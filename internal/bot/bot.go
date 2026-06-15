@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 
 	"odysseyshield/internal/config"
 	"odysseyshield/internal/filter"
@@ -44,7 +46,8 @@ func New(cfg *config.Config, store *storage.Storage) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Authorised as @%s", api.Self.UserName)
+	api.Debug = strings.EqualFold(os.Getenv("DEBUG"), "true") || os.Getenv("DEBUG") == "1"
+	log.Printf("Authorised as @%s (proxy=%t debug=%t)", api.Self.UserName, cfg.ProxyURL != "", api.Debug)
 
 	return &Bot{
 		api:    api,
@@ -55,21 +58,38 @@ func New(cfg *config.Config, store *storage.Storage) (*Bot, error) {
 	}, nil
 }
 
-// Start begins polling for updates. Blocks until Stop() is called.
-// Deprecated: Use HandleUpdate for webhook mode.
+// Start begins long polling. Blocks until Stop() is called.
 func (b *Bot) Start() {
 	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	u.Timeout = 30
+	u.AllowedUpdates = []string{
+		"message",
+		"edited_message",
+		"callback_query",
+		"channel_post",
+		"edited_channel_post",
+	}
 
+	log.Println("Polling: waiting for Telegram updates…")
 	updates := b.api.GetUpdatesChan(u)
 	for {
 		select {
-		case upd := <-updates:
-			b.handleUpdate(upd)
+		case upd, ok := <-updates:
+			if !ok {
+				log.Println("Polling: updates channel closed")
+				return
+			}
+			b.HandleUpdate(upd)
 		case <-b.stop:
 			return
 		}
 	}
+}
+
+// PingTelegram checks API connectivity (used at startup).
+func (b *Bot) PingTelegram() error {
+	_, err := b.api.GetMe()
+	return err
 }
 
 // HandleUpdate processes a single update from webhook.
@@ -91,6 +111,13 @@ func (b *Bot) SetWebhook(webhookURL string) error {
 	}
 	cfg.DropPendingUpdates = true
 	cfg.MaxConnections = 40
+	cfg.AllowedUpdates = []string{
+		"message",
+		"edited_message",
+		"callback_query",
+		"channel_post",
+		"edited_channel_post",
+	}
 	_, err = b.api.Request(cfg)
 	return err
 }
